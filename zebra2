@@ -1,0 +1,43 @@
+#!/bin/bash
+
+KRNF=/tmp/.krnl
+ZBRF=/tmp/.zbrl
+ZBRT=/tmp/.zbrt
+BGPF=/tmp/.bgpl
+KRNF=/tmp/.krnl
+HASHF=/tmp/.zbrh
+echo -n "" >$HASHF
+echo -e "=================\nStarting script: zebra2"
+while true; do
+  HASHS=$(cat $HASHF | cut -d" " -f1)
+  HASHN=$(vtysh -c 'show ip bgp' | grep "^*" | md5sum | cut -d" " -f1)
+  if [ "$HASHS" != "$HASHN" ]; then
+    echo $HASHN >$HASHF
+    BGPD=$(vtysh -c 'show ip bgp' | grep "^*" | sed 's/^* /*-/g' | sed 's/            / %%RPL/g' | tr -s " " | cut -d" " -f1-3)
+    echo -n "" >$BGPF
+    ip route | grep 'proto zebra' | cut -d " " -f1-3 >$ZBRF
+    ip route | grep -v "proto zebra" | cut -d" " -f1 >$KRNF
+    CRT=""
+    while read -r LINE; do
+      TAG=$(echo $LINE | cut -d" " -f1)
+      DST=$(echo $LINE | cut -d" " -f2)
+      GTW=$(echo $LINE | cut -d" " -f3)
+      if [ "$DST" == "%%RPL" ]; then
+        DST=$CRT
+      else
+        CRT=$DST
+      fi
+      if [ "$TAG" == "*>" ]; then
+        if [ "$(cat $KRNF | grep $DST | wc -l)" == "0" ]; then
+          echo $DST via $GTW >>$BGPF
+        fi
+      fi
+    done <<< "$BGPD"
+    diff /tmp/.zbrl /tmp/.bgpl | grep -e "<" -e ">" | sed 's/</ip route del/g' | sed 's/>/ip route add/g' | sed 's/$/ proto zebra/g' >$ZBRT
+    sh $ZBRT
+    echo -e "=================\n$(date +'%D %T')\n================="
+    cat $ZBRT
+    rm -f $ZBRF $ZBRT $BGPF
+  fi
+  sleep 1
+done
